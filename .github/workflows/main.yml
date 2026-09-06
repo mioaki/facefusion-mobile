@@ -1,7 +1,7 @@
 name: Disable NSFW Content Gate
 
 on:
-  workflow_dispatch:   # Run manually from the Actions tab
+  workflow_dispatch:
 
 jobs:
   patch:
@@ -15,14 +15,14 @@ jobs:
 
       - name: Patch ContentGate.kt
         run: |
-          python3 << 'PY'
+          python3 -c '
           from pathlib import Path
           import re
 
           file = Path("work/android/app/src/main/java/com/facefusion/mobile/ContentGate.kt")
           content = file.read_text()
 
-          # 1. Add ENABLED constant right after "object ContentGate {"
+          # 1. Add ENABLED constant
           if "const val ENABLED" not in content:
               content = content.replace(
                   "object ContentGate {",
@@ -30,62 +30,60 @@ jobs:
                   1
               )
 
-          # 2. Add bypassResult() helper (after the Result data class)
-          bypass = '''
-      private fun bypassResult() = Result(
-          verdict = Verdict.ALLOW,
-          score = 0f,
-          sampled = 0,
-          flagged = 0,
-          detail = "content gate disabled"
-      )
-          '''
+          # 2. Add bypassResult() helper (after Result data class)
+          bypass = (
+              "\n    private fun bypassResult() = Result(\n"
+              "        verdict = Verdict.ALLOW,\n"
+              "        score = 0f,\n"
+              "        sampled = 0,\n"
+              "        flagged = 0,\n"
+              "        detail = \"content gate disabled\"\n"
+              "    )\n"
+          )
           if "fun bypassResult" not in content:
-              # Insert after the closing brace of the Result data class
               content = re.sub(
-                  r'(data class Result\([\s\S]*?\n    \})',
-                  r'\1\n' + bypass,
+                  r"(data class Result\([\s\S]*?\n    \})",
+                  r"\1" + bypass,
                   content,
                   count=1
               )
 
-          # 3. Early return at the start of checkImage
+          # 3. Early return in checkImage
           if "if (!ENABLED) return bypassResult()" not in content:
               content = re.sub(
-                  r'(fun checkImage\(bitmap: Bitmap\): Result \{\n)',
-                  r'\1        if (!ENABLED) return bypassResult()\n\n',
+                  r"(fun checkImage\(bitmap: Bitmap\): Result \{\n)",
+                  r"\1        if (!ENABLED) return bypassResult()\n\n",
                   content,
                   count=1
               )
 
           # 4. Replace checkVideo
           content = re.sub(
-              r'fun checkVideo\(file: File\): Result\s*=\s*sampleByRetriever\(file\) \?: sampleByDecoder\(file\)',
-              '''fun checkVideo(file: File): Result {
-          if (!ENABLED) return bypassResult()
-
-          return sampleByRetriever(file) ?: sampleByDecoder(file)
-      }''',
+              r"fun checkVideo\(file: File\): Result\s*=\s*sampleByRetriever\(file\) \?: sampleByDecoder\(file\)",
+              "fun checkVideo(file: File): Result {\n"
+              "        if (!ENABLED) return bypassResult()\n\n"
+              "        return sampleByRetriever(file) ?: sampleByDecoder(file)\n"
+              "    }",
               content,
               count=1
           )
 
           file.write_text(content)
           print("Patch applied successfully")
-          PY
+          '
 
       - name: Verify the patch
         run: |
           echo "===== ENABLED + bypassResult ====="
-          grep -n -A 8 -E 'ENABLED|bypassResult' \
+          grep -n -A 10 -E "ENABLED|bypassResult" \
             work/android/app/src/main/java/com/facefusion/mobile/ContentGate.kt || true
           echo
           echo "===== checkImage ====="
-          grep -n -A 6 'fun checkImage' \
+          grep -n -A 8 "fun checkImage" \
             work/android/app/src/main/java/com/facefusion/mobile/ContentGate.kt
           echo
           echo "===== checkVideo ====="
-          grep -n -A 6 'fun checkVideo' \
+          grep -n -A 8 "fun checkVideo" \
             work/android/app/src/main/java/com/facefusion/mobile/ContentGate.kt
 
       - name: Upload patched file
@@ -94,7 +92,6 @@ jobs:
           name: ContentGate-patched
           path: work/android/app/src/main/java/com/facefusion/mobile/ContentGate.kt
 
-      # Optional – commit to a new branch
       - name: Commit & push patched file
         run: |
           git config user.name "github-actions[bot]"
