@@ -1,0 +1,102 @@
+name: Disable NSFW Content Gate
+
+on:
+  workflow_dispatch:          # Manual trigger from the Actions tab
+  # push:                     # Uncomment if you want it on every push
+  #   branches: [main]
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write         # Needed if you want the workflow to commit
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Patch ContentGate.kt
+        run: |
+          FILE="work/android/app/src/main/java/com/facefusion/mobile/ContentGate.kt"
+
+          # 1. Add the ENABLED constant right after "object ContentGate {"
+          sed -i '/object ContentGate {/a\    const val ENABLED = false' "$FILE"
+
+          # 2. Insert the bypassResult helper after the Result data class
+          #    (looks for the closing of the Result class)
+          python3 - << 'EOF'
+          import re
+
+          with open("work/android/app/src/main/java/com/facefusion/mobile/ContentGate.kt") as f:
+              content = f.read()
+
+          bypass = '''
+      private fun bypassResult() = Result(
+          verdict = Verdict.ALLOW,
+          score = 0f,
+          sampled = 0,
+          flagged = 0,
+          detail = "content gate disabled"
+      )
+          '''
+
+          # Insert after the Result data class closing brace
+          content = re.sub(
+              r'(data class Result\([^)]*\) \{[^}]*\})',
+              r'\1' + bypass,
+              content,
+              count=1,
+              flags=re.DOTALL
+          )
+
+          # 3. Early return in checkImage
+          content = re.sub(
+              r'(fun checkImage\(bitmap: Bitmap\): Result \{)\s*',
+              r'\1\n        if (!ENABLED) return bypassResult()\n\n        ',
+              content,
+              count=1
+          )
+
+          # 4. Replace checkVideo body
+          content = re.sub(
+              r'fun checkVideo\(file: File\): Result\s*=\s*sampleByRetriever\(file\) \?: sampleByDecoder\(file\)',
+              '''fun checkVideo(file: File): Result {
+          if (!ENABLED) return bypassResult()
+
+          return sampleByRetriever(file) ?: sampleByDecoder(file)
+      }''',
+              content,
+              count=1
+          )
+
+          with open("work/android/app/src/main/java/com/facefusion/mobile/ContentGate.kt", "w") as f:
+              f.write(content)
+
+          print("Patch applied successfully")
+          EOF
+
+      - name: Show the patched file (for verification)
+        run: |
+          echo "===== First 80 lines of ContentGate.kt ====="
+          head -n 80 work/android/app/src/main/java/com/facefusion/mobile/ContentGate.kt
+          echo "..."
+          echo "===== checkImage and checkVideo ====="
+          grep -A 15 -E 'fun checkImage|fun checkVideo|bypassResult|ENABLED' \
+            work/android/app/src/main/java/com/facefusion/mobile/ContentGate.kt
+
+      - name: Upload patched file as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ContentGate-patched
+          path: work/android/app/src/main/java/com/facefusion/mobile/ContentGate.kt
+
+      # Optional: commit the change to a new branch
+      - name: Commit patched file (optional)
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b disable-nsfw-gate
+          git add work/android/app/src/main/java/com/facefusion/mobile/ContentGate.kt
+          git commit -m "Disable NSFW content gate (ENABLED = false)"
+          git push origin disable-nsfw-gate
