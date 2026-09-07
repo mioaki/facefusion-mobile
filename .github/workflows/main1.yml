@@ -1,5 +1,9 @@
-  build-apk:
-    needs: patch          # only if you keep the patch job
+name: Build Apk
+on:
+  workflow_dispatch: # Permite ejecutar la compilación manualmente desde un botón
+
+jobs:
+  build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout (patched branch)
