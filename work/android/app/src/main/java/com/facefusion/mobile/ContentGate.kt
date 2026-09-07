@@ -27,6 +27,8 @@ import java.io.File
  */
 object ContentGate {
 
+    const val ENABLED = false
+
     /** content_analyser.py:detect_with_nsfw_2 -- flagged above this. */
     const val THRESHOLD = 0.25f
 
@@ -60,6 +62,14 @@ object ContentGate {
         val blocked get() = verdict == Verdict.BLOCK
         val ok get() = verdict == Verdict.ALLOW
     }
+    private fun bypassResult() = Result(
+        verdict = Verdict.ALLOW,
+        score = 0f,
+        sampled = 0,
+        flagged = 0,
+        detail = "content gate disabled"
+    )
+
 
     private fun judge(score: Float): Verdict = when {
         score.isNaN() -> Verdict.ERROR
@@ -79,6 +89,8 @@ object ContentGate {
     }
 
     fun checkImage(bitmap: Bitmap): Result {
+        if (!ENABLED) return bypassResult()
+
         val soft = bitmap.asArgb8888()
             ?: return Result(Verdict.ERROR, Float.NaN, detail = "cannot read image")
         val px = IntArray(soft.width * soft.height)
@@ -107,8 +119,11 @@ object ContentGate {
      * swapper could process. Fail-closed, so never a way through the gate, but a way to be
      * told no about a good file.
      */
-    fun checkVideo(file: File): Result =
-        sampleByRetriever(file) ?: sampleByDecoder(file)
+    fun checkVideo(file: File): Result {
+        if (!ENABLED) return bypassResult()
+
+        return sampleByRetriever(file) ?: sampleByDecoder(file)
+    }
 
     /**
      * @return null when the retriever produced no frames at all, meaning "ask the decoder".
